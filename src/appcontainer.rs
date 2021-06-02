@@ -14,21 +14,15 @@ extern crate log;
 use log::*;
 use super::winffi;
 
-use super::winffi::{HRESULT_FROM_WIN32, SE_GROUP_ENABLED, string_to_sid, sid_to_string,
-                    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, STARTUPINFOEXW, LPSTARTUPINFOEXW,
-                    HandlePtr, HANDLE_FLAG_INHERIT};
-use self::winapi::{DWORD, LPVOID, LPWSTR, PSID, INVALID_HANDLE_VALUE, PSID_AND_ATTRIBUTES,
-                   SID_AND_ATTRIBUTES, ERROR_SUCCESS, ERROR_ALREADY_EXISTS, HRESULT,
-                   SECURITY_CAPABILITIES, LPPROC_THREAD_ATTRIBUTE_LIST,
-                   PPROC_THREAD_ATTRIBUTE_LIST, SIZE_T, PSIZE_T, PVOID, PSECURITY_CAPABILITIES,
-                   STARTUPINFOW, LPSTARTUPINFOW, HANDLE, WORD, LPBYTE, STARTF_USESTDHANDLES,
-                   STARTF_USESHOWWINDOW, SW_HIDE, ERROR_FILE_NOT_FOUND, PROCESS_INFORMATION,
-                   EXTENDED_STARTUPINFO_PRESENT, LPSECURITY_ATTRIBUTES};
-use std::path::Path;
+use super::winffi::*;
+use self::winapi::*;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::iter::once;
 use std::mem;
+use std::path::Path;
+use std::{thread, time};
+use std::fs;
 
 #[cfg(test)]
 use std::env;
@@ -50,7 +44,7 @@ pub struct Profile {
 
 #[allow(dead_code)]
 impl Profile {
-    pub fn new(profile: &str, path: &str) -> Result<Profile, HRESULT> {
+    pub fn new(profile: &str, path: &str, is_debug: bool, is_outbound: bool,) -> Result<Profile, HRESULT> {
         let mut pSid: PSID = 0 as PSID;
         let profile_name: Vec<u16> = OsStr::new(profile)
             .encode_wide()
@@ -90,8 +84,8 @@ impl Profile {
         Ok(Profile {
                profile: profile.to_string(),
                childPath: path.to_string(),
-               outboundNetwork: true,
-               debug: false,
+               outboundNetwork: is_outbound,
+               debug: is_debug,
                sid: string_sid,
            })
     }
@@ -115,11 +109,11 @@ impl Profile {
         false
     }
 
-    pub fn enable_outbound_network(&mut self, has_outbound_network: bool) {
+    pub fn set_outbound_network(&mut self, has_outbound_network: bool) {
         self.outboundNetwork = has_outbound_network;
     }
 
-    pub fn enable_debug(&mut self, is_debug: bool) {
+    pub fn set_debug(&mut self, is_debug: bool) {
         self.debug = is_debug;
     }
 
@@ -159,7 +153,7 @@ impl Profile {
             },
             lpAttributeList: 0 as PPROC_THREAD_ATTRIBUTE_LIST,
         };
-        let mut dwCreationFlags: DWORD = 0 as DWORD;
+        let mut dwCreationFlags: DWORD = CREATE_SUSPENDED;
         let mut attrBuf: Vec<u8>;
 
         if !self.debug {
@@ -281,27 +275,110 @@ impl Profile {
 
         debug!("  Child PID = {:}", pi.dwProcessId);
 
-        unsafe { kernel32::CloseHandle(pi.hThread) };
+        unsafe {
+            let hJob = kernel32::CreateJobObjectA(0 as LPSECURITY_ATTRIBUTES, 0 as LPCSTR);
 
+            let mut bli = JOBOBJECT_BASIC_LIMIT_INFORMATION {
+                PerProcessUserTimeLimit: 0 as LARGE_INTEGER,
+                PerJobUserTimeLimit: 0 as LARGE_INTEGER,
+                LimitFlags: 0 as DWORD,
+                MinimumWorkingSetSize: 0 as SIZE_T,
+                MaximumWorkingSetSize: 0 as SIZE_T,
+                ActiveProcessLimit: 0 as DWORD,
+                Affinity: 0 as ULONG_PTR,
+                PriorityClass: 0 as DWORD,
+                SchedulingClass: 0 as DWORD,
+            };
+            bli.PerProcessUserTimeLimit = 120 * 1000 * 1000 * 10; //10 * 1000 * 1000 * 10;
+            bli.PerJobUserTimeLimit = 120 * 1000 * 1000 * 10; //10 * 1000 * 1000 * 10;
+            bli.LimitFlags = JOB_OBJECT_LIMIT_PROCESS_TIME
+                | JOB_OBJECT_LIMIT_JOB_TIME
+                | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+                | JOB_OBJECT_LIMIT_JOB_MEMORY
+                | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+            bli.ActiveProcessLimit = 2;
+
+            let ioc = IO_COUNTERS {
+                OtherOperationCount: 0 as SIZE_T,
+                OtherTransferCount: 0 as SIZE_T,
+                ReadOperationCount: 0 as SIZE_T,
+                ReadTransferCount: 0 as SIZE_T,
+                WriteOperationCount: 0 as SIZE_T,
+                WriteTransferCount: 0 as SIZE_T,
+            };
+
+            let mut eli = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+                BasicLimitInformation: bli,
+                IoInfo: ioc,
+                ProcessMemoryLimit: 0 as SIZE_T,
+                JobMemoryLimit: 0 as SIZE_T,
+                PeakProcessMemoryUsed: 0 as SIZE_T,
+                PeakJobMemoryUsed: 0 as SIZE_T,
+            };
+
+            let memoryLimit = 100;
+            eli.JobMemoryLimit = memoryLimit * 1000 * 1000;
+            eli.ProcessMemoryLimit = memoryLimit * 1000 * 1000;
+            eli.PeakJobMemoryUsed = memoryLimit * 1000 * 1000;
+            eli.PeakProcessMemoryUsed = memoryLimit * 1000 * 1000;
+
+            kernel32::SetInformationJobObject(
+                hJob,
+                JobObjectExtendedLimitInformation,
+                mem::transmute::<&JOBOBJECT_EXTENDED_LIMIT_INFORMATION, LPVOID>(&mut eli),
+                mem::size_of::<winapi::JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as DWORD,
+            );
+
+            /*let flagAssign = */
+            kernel32::AssignProcessToJobObject(hJob, pi.hProcess);
+            /*println!(
+                " flagAssign {:} to pid {:} Resuming thread id {:} {:?}\n",
+                flagAssign, pi.dwProcessId, pi.dwThreadId, pi.hThread
+            );*/
+            /*let resumed = */
+            kernel32::ResumeThread(pi.hThread);
+            //println!("Thread resumed {:}\n", resumed);
+            //println!("Get Last Error {:}\n", kernel32::GetLastError());
+
+            let ten_minutes = time::Duration::from_millis(1000 * 60 * 10);
+
+            thread::sleep(ten_minutes);
+            kernel32::TerminateJobObject(hJob, 0);
+
+            
+            match fs::remove_dir_all(dirPath) {                
+                Ok(_x) => {},
+                Err(e) => eprintln!("Problem while removing dir {}", e),
+              }
+            
+            kernel32::CloseHandle(hJob);
+            kernel32::CloseHandle(pi.hThread);
+            Profile::remove(self.profile.as_str());
+        };
         Ok(HandlePtr::new(pi.hProcess))
+
+        //TODO : Fermer des handles ! ?
     }
+
+     
+    
 }
 
 // ----- UNIT TESTS -----
 #[test]
 fn test_profile_sid() {
     {
-        let result = Profile::new("default_profile", "INVALID_FILE");
+        let result = Profile::new("default_profile", "INVALID_FILE", false, true);
         assert!(result.is_err());
     }
 
     {
-        let mut result = Profile::new("cmd_profile", "\\Windows\\System32\\cmd.exe");
+        let mut result = Profile::new("cmd_profile", "\\Windows\\System32\\cmd.exe", false, true);
         assert!(result.is_ok());
 
         let profile = result.unwrap();
 
-        result = Profile::new("cmd_profile", "\\Windows\\System32\\cmd.exe");
+        result = Profile::new("cmd_profile", "\\Windows\\System32\\cmd.exe", false, true);
         assert!(result.is_ok());
 
         let same_profile = result.unwrap();
@@ -309,7 +386,7 @@ fn test_profile_sid() {
 
         assert!(Profile::remove("cmd_profile"));
 
-        result = Profile::new("cmd_profile1", "\\Windows\\System32\\cmd.exe");
+        result = Profile::new("cmd_profile1", "\\Windows\\System32\\cmd.exe", false, true);
         assert!(result.is_ok());
 
         let new_profile = result.unwrap();
@@ -373,7 +450,7 @@ fn test_appcontainer() {
     println!("dir_path = {:?}", dir_path);
     println!("Attempting to create AppContainer profile...");
 
-    if let Ok(mut profile) = Profile::new(&profile_name, child_path.to_str().unwrap()) {
+    if let Ok(mut profile) = Profile::new(&profile_name, child_path.to_str().unwrap(), false, true) {
         let wrapper = ProfileWrapper { name: profile_name };
 
         {
@@ -398,7 +475,7 @@ fn test_appcontainer() {
         }
 
         println!("Disabling outbound network connections");
-        profile.enable_outbound_network(false);
+        profile.set_outbound_network(false);
 
         {
             println!("Testing without outbound network connections");
@@ -422,10 +499,10 @@ fn test_appcontainer() {
         }
 
         println!("Enabling outbound network connections");
-        profile.enable_outbound_network(true);
+        profile.set_outbound_network(true);
 
         println!("Disabling AppContainer");
-        profile.enable_debug(true);
+        profile.set_debug(true);
 
         {
             println!("Testing debug mode");
@@ -465,7 +542,7 @@ fn test_stdout_redirect() {
     let dir_path = child_path.clone();
     child_path.push("greenhornd.exe");
 
-    let raw_profile = Profile::new(&profile_name, child_path.to_str().unwrap());
+    let raw_profile = Profile::new(&profile_name, child_path.to_str().unwrap(), false, true);
     if let Err(x) = raw_profile {
         println!("GLE={:}", x);
     }

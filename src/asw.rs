@@ -34,6 +34,10 @@ pub struct TcpClient {
 pub trait HasRawHandle {
     fn raw_handle(&self) -> HANDLE;
 }
+pub trait HasRawSocket {
+    fn raw_socket(&self) -> SOCKET;
+}
+
 
 impl TcpClient {
     fn from_accept(socket: SOCKET) -> TcpClient {
@@ -44,6 +48,12 @@ impl TcpClient {
 impl HasRawHandle for TcpClient {
     fn raw_handle(&self) -> HANDLE {
         self.socket as HANDLE
+    }
+}
+
+impl HasRawSocket for TcpClient {
+    fn raw_socket(&self) -> SOCKET {
+        self.socket
     }
 }
 
@@ -231,8 +241,16 @@ impl Drop for TcpServer {
     }
 }
 
+
+impl HasRawSocket for TcpServer {
+    fn raw_socket(&self) -> SOCKET {
+        self.socket
+    }
+}
+
 impl HasRawHandle for TcpServer {
     fn raw_handle(&self) -> HANDLE {
         self.socket as HANDLE
     }
 }
+

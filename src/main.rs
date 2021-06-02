@@ -1,13 +1,14 @@
 extern crate clap;
 extern crate env_logger;
 
-#[macro_use]
+//#[macro_use]
 extern crate log;
 
 #[cfg(test)]
 extern crate kernel32;
-
+extern crate chrono;
 extern crate winapi;
+extern crate md5; 
 
 
 include!(concat!(env!("OUT_DIR"), "/version.rs"));
@@ -17,26 +18,33 @@ mod acl;
 mod appcontainer;
 mod winffi;
 mod asw;
-
+mod privatedirectory;
+use std::process;
 
 #[cfg(not(test))]
 use asw::HasRawHandle;
+use asw::HasRawSocket;
 
 #[cfg(test)]
-use winapi::{INVALID_HANDLE_VALUE, DWORD, INFINITE, WAIT_OBJECT_0};
+use winapi::{INVALID_HANDLE_VALUE, DWORD, INFINITE, WAIT_OBJECT_0, HANDLE};
+
+#[cfg(not(test))]
+use std::fs;
+use std::thread;
 
 #[cfg(test)]
 use std::env;
+use chrono::{DateTime, Utc};
+
 
 #[allow(unused_imports)]
-use winffi::{GENERIC_READ, GENERIC_EXECUTE, GENERIC_ALL};
+use winffi::{GENERIC_WRITE, GENERIC_READ, GENERIC_EXECUTE, GENERIC_ALL};
 
-#[cfg(not(test))]
-use std::process;
+
+
 
 #[cfg(all(not(test), windows))]
 use winapi::HANDLE;
-
 use std::path::{Path, PathBuf};
 
 #[allow(unused_imports)]
@@ -86,7 +94,7 @@ fn add_sid_profile_entry(path: &Path, sid: &str, mask: u32) -> bool {
 
     match dacl.apply_to_path(path.to_str().unwrap()) {
         Ok(_) => {
-            info!("  Added ACL entry for AppContainer profile in {:?}", path);
+            //info!("  Added ACL entry for AppContainer profile in {:?}", path);
         }
         Err(x) => {
             error!("Failed to set new ACL into {:?}: error={:}", path, x);
@@ -97,14 +105,51 @@ fn add_sid_profile_entry(path: &Path, sid: &str, mask: u32) -> bool {
     true
 }
 
+fn create_profile(
+    child_path: &Path,
+    is_debug: bool,
+    is_outbound: bool,
+    profile_name: &str,
+) -> appcontainer::Profile {
+    // NOTE: Will special unicode paths mess up this unwrap()?
+    let profile = match appcontainer::Profile::new(
+        profile_name,
+        child_path.to_str().unwrap(),
+        is_debug,
+        is_outbound,
+    ) {
+        Ok(x) => x,
+        Err(x) => {
+            error!(
+                "Failed to create AppContainer profile for {:}: error={:}",
+                profile_name, x
+            );
+            process::exit(-1);
+        }
+    };
+
+    
+    //info!("  profile name = {:}", profile_name);
+    //info!("  sid = {:}", profile.sid);
+    //info!("  debug = {:}", is_debug);
+    //info!("  outbound network = {:}", is_outbound);
+
+    return profile;
+}
+
 #[cfg(all(windows, not(test)))]
 #[allow(unreachable_code)]
 fn do_run(matches: &ArgMatches) {
-    let key_path = PathBuf::from(matches.value_of("key").unwrap());
-    info!("  key_path = {:?}", key_path);
+    let flag_path = PathBuf::from(matches.value_of("key").unwrap());
+    let dir_maze = PathBuf::from(matches.value_of("foldermazes").unwrap());
 
-    if !key_path.exists() || key_path.is_dir() || !key_path.is_file() {
-        error!("Specified key path ({:?}) is invalid", key_path);
+    if let Err(_) = fs::create_dir_all(dir_maze.clone()) {
+        println!("Impossible to create tmp directory!");
+        process::exit(-1);
+    }
+
+    if !flag_path.exists() || flag_path.is_dir() || !flag_path.is_file() {
+        error!("Specified key path ({:?}) is invalid", flag_path);
         process::exit(-1);
     }
 
@@ -119,36 +164,15 @@ fn do_run(matches: &ArgMatches) {
     let port = matches.value_of("port").unwrap();
     info!("  tcp server port = {:}", port);
 
-    let profile_name = matches.value_of("name").unwrap();
 
-    // NOTE: Will special unicode paths mess up this unwrap()?
-    let mut profile = match appcontainer::Profile::new(profile_name,
-                                                       child_path.to_str().unwrap()) {
-        Ok(x) => x,
-        Err(x) => {
-            error!("Failed to create AppContainer profile for {:}: error={:}",
-                   profile_name,
-                   x);
-            process::exit(-1);
-        }
-    };
-    info!("  profile name = {:}", profile_name);
-    info!("  sid = {:}", profile.sid);
 
-    profile.enable_outbound_network(matches.is_present("outbound"));
-    info!("AppContainer.enable_outbound_network_conn = {:}",
-          matches.is_present("outbound"));
+    /*
+    let mut flag_dir_path = flag_path.clone();
+    flag_dir_path.pop();
 
-    profile.enable_debug(matches.is_present("debug"));
-    info!("AppContainer.enable_debug = {:}",
-          matches.is_present("debug"));
-
-    let mut key_dir_path = key_path.clone();
-    key_dir_path.pop();
-
-    if !add_sid_profile_entry(&key_dir_path, &profile.sid, GENERIC_READ | GENERIC_EXECUTE) {
+    if !add_sid_profile_entry(&flag_dir_path, &profile.sid, GENERIC_READ | GENERIC_EXECUTE) {
         error!("Failed to add AppContainer profile ACL entry into {:?}",
-               key_dir_path);
+        flag_dir_path);
         process::exit(-1);
     }
 
@@ -157,10 +181,10 @@ fn do_run(matches: &ArgMatches) {
                key_path);
         process::exit(-1);
     }
-
+    */
     {
-        let key_dir_abspath = key_dir_path.canonicalize().unwrap();
-        info!("key_dir_abspath = {:?}", key_dir_abspath);
+        /*let key_dir_abspath = key_dir_path.canonicalize().unwrap();
+        info!("key_dir_abspath = {:?}", key_dir_abspath);*/
 
         info!("Attempting to bind to port {:}", port);
         let server = match asw::TcpServer::bind(port) {
@@ -173,27 +197,21 @@ fn do_run(matches: &ArgMatches) {
 
         println!("Listening for clients on port {:}", port);
 
+        let is_debug = matches.is_present("debug");
+        let is_outbound = matches.is_present("outbound");
         loop {
             match server.get_event() {
                 asw::TcpServerEvent::Accept => {
                     let raw_client = server.accept();
                     if raw_client.is_some() {
                         let (client, addr) = raw_client.unwrap();
-                        let raw_socket = client.raw_handle();
+                        let addr = addr.clone();
+                        let child_path = child_path.to_path_buf();
 
-                        match profile.launch(raw_socket as HANDLE,
-                                             raw_socket as HANDLE,
-                                             key_dir_abspath.to_str().unwrap()) {
-                            Ok(x) => {
-                                info!("     Launched new process with handle {:?} with current_dir = {:?}",
-                                      x.raw,
-                                      key_dir_path);
-                                println!(" + Accepted new client connection from {:}", addr);
-                            }
-                            Err(x) => {
-                                error!("     Failed to launch new process: error={:}", x);
-                            }
-                        }
+                        let dir_maze = dir_maze.clone();
+                        thread::spawn(move || {
+                            handle_client(client, dir_maze, child_path, is_debug, is_outbound, addr)
+                        });
                     }
                 }
                 _ => {}
@@ -202,6 +220,96 @@ fn do_run(matches: &ArgMatches) {
         process::exit(0);
     }
 }
+
+fn get_unique_string(client: asw::TcpClient, addr: String) -> String{
+    let raw_socket = client.raw_socket();
+    let uid = privatedirectory::getUIDUser(raw_socket);
+    let ip_client: Vec<&str> = addr.as_str().split(":").collect();
+    let value_to_hash = format!("{}{}{}", "SSTIC_magic_prefix_dzadza", ip_client[0], uid);
+    let digest = md5::compute(value_to_hash.clone());
+    let hash_ip_string = format!("{:x}", digest);
+    return hash_ip_string.clone();
+}
+
+
+fn handle_client(
+    client: asw::TcpClient,
+    dir_maze: PathBuf,
+    child_path: PathBuf,
+    is_debug: bool,
+    is_outbound: bool,
+    addr: String,
+) {
+
+    
+    let now: DateTime<Utc> = Utc::now();
+    println!(
+        " + Accepted new client connection from {:} at {}",
+        addr,
+        now.to_rfc2822()
+    );
+
+
+    let raw_socket_handle = client.raw_handle();
+
+    let hash_ip_string = get_unique_string(client, addr);
+    
+    let profile = create_profile(&child_path, is_debug, is_outbound, &(hash_ip_string.clone()));   
+
+
+    let mut path_mazes_random = dir_maze.clone();    
+    path_mazes_random.push(hash_ip_string.clone());
+    if let Err(e) = fs::create_dir_all(&path_mazes_random) {
+        println!(
+            "Impossible to create tmp directory! {:?} {:?}",
+            path_mazes_random, e
+        );
+    }
+
+    if path_mazes_random.to_str().unwrap() != dir_maze.to_str().unwrap() {
+        if !add_sid_profile_entry(&path_mazes_random, &profile.sid.clone(), GENERIC_READ | GENERIC_WRITE) {
+            error!(
+                "Failed to add AppContainer profile ACL entry into {:?}",
+                path_mazes_random
+            );
+            process::exit(-1);
+        }
+
+        
+        match profile.launch(
+            raw_socket_handle as HANDLE,
+            raw_socket_handle as HANDLE,
+            path_mazes_random.to_str().unwrap(),        
+        ) {
+            Ok(x) => {
+                info!("End of {:}", hash_ip_string);
+                /*info!(
+                    "     Launched new process with handle {:?} with current_dir = {:?}",
+                    x.raw, path_mazes_random
+                );
+                let now: DateTime<Utc> = Utc::now();
+                println!(
+                    " + Accepted new client connection from {:} at {}",
+                    addr,
+                    now.to_rfc2822()
+                );*/
+                unsafe {
+                    kernel32::CloseHandle(x.raw);
+                };
+            }
+            Err(_x) => {
+
+                match fs::remove_dir_all(path_mazes_random) {                
+                    Ok(_x) => {},
+                    Err(e) => eprintln!("Problem while removing dir {}", e),
+                  }
+                //error!("     Failed to launch new process: error={:}", x);
+            }
+        }
+    }
+}
+
+
 
 #[cfg(windows)]
 fn remove_sid_acl_entry(path: &Path, sid: &str) -> bool {
@@ -253,7 +361,7 @@ fn do_clean(matches: &ArgMatches) {
 
         // We create the profile_name with key_path as the child process in order
         // to get the AppContainer SID for profile_name
-        let profile = match appcontainer::Profile::new(profile_name, key_path.to_str().unwrap()) {
+        let profile = match appcontainer::Profile::new(profile_name, key_path.to_str().unwrap(), false, true) {
             Ok(x) => x,
             Err(x) => {
                 error!("Failed to get profile information for \"{:}\": error={:}",
@@ -313,11 +421,16 @@ fn main() {
                      .value_name("KEYFILE")
                      .required(true)
                      .help("The path to the \"key\" file that contains the challenge solution token"))
+            .arg(Arg::with_name("foldermazes")
+                     .short("f")
+                     .long("foldermazes")
+                     .value_name("FOLDER_MAZES")
+                     .help("folder mazes"))                     
             .arg(Arg::with_name("port")
                      .short("p")
                      .long("port")
                      .value_name("PORT")
-                     .default_value("4444")
+                     .default_value("4577")
                      .help("Port to bind the TCP server on"))
             .arg(Arg::with_name("CHILD_PATH")
                      .index(1)
@@ -447,7 +560,7 @@ fn test_sandbox_key_read() {
     println!("key_path = {:?}", key_path);
     println!("Attempting to create AppContainer profile...");
 
-    if let Ok(profile) = appcontainer::Profile::new(&profile_name, child_path.to_str().unwrap()) {
+    if let Ok(profile) = appcontainer::Profile::new(&profile_name, child_path.to_str().unwrap(), false, true) {
         let wrapper = ProfileWrapper { name: profile_name };
 
         println!("Setting ACLs for {:} on {:?}", &profile.sid, dir_path);
@@ -478,3 +591,6 @@ fn test_sandbox_key_read() {
         assert!(false);
     }
 }
+
+
+
