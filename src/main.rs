@@ -126,9 +126,7 @@ fn create_profile(
             );
             process::exit(-1);
         }
-    };
-
-    
+    };  
     //info!("  profile name = {:}", profile_name);
     //info!("  sid = {:}", profile.sid);
     //info!("  debug = {:}", is_debug);
@@ -164,6 +162,14 @@ fn do_run(matches: &ArgMatches) {
     let port = matches.value_of("port").unwrap();
     info!("  tcp server port = {:}", port);
 
+    let timeout = matches.value_of("timeout").unwrap().parse::<i64>().unwrap();
+    info!("JOB parameters :   timeout before kill = {:}", timeout);
+
+    let nb_process_concurrent = matches.value_of("nb_process_concurrent").unwrap().parse::<u32>().unwrap();
+    info!("JOB parameters :  nb processes Concurrent = {:}", nb_process_concurrent);
+
+    let max_memory = matches.value_of("max_memory").unwrap().parse::<u64>().unwrap();
+    info!("JOB parameters :  max Memory = {:}", max_memory);
 
 
     /*
@@ -199,6 +205,7 @@ fn do_run(matches: &ArgMatches) {
 
         let is_debug = matches.is_present("debug");
         let is_outbound = matches.is_present("outbound");
+
         loop {
             match server.get_event() {
                 asw::TcpServerEvent::Accept => {
@@ -210,7 +217,7 @@ fn do_run(matches: &ArgMatches) {
 
                         let dir_maze = dir_maze.clone();
                         thread::spawn(move || {
-                            handle_client(client, dir_maze, child_path, is_debug, is_outbound, addr)
+                            handle_client(client, dir_maze, child_path, is_debug, is_outbound, addr, timeout, nb_process_concurrent, max_memory)
                         });
                     }
                 }
@@ -221,15 +228,6 @@ fn do_run(matches: &ArgMatches) {
     }
 }
 
-fn get_unique_string(client: asw::TcpClient, addr: String) -> String{
-    let raw_socket = client.raw_socket();
-    let uid = privatedirectory::getUIDUser(raw_socket);
-    let ip_client: Vec<&str> = addr.as_str().split(":").collect();
-    let value_to_hash = format!("{}{}{}", "SSTIC_magic_prefix_dzadza", ip_client[0], uid);
-    let digest = md5::compute(value_to_hash.clone());
-    let hash_ip_string = format!("{:x}", digest);
-    return hash_ip_string.clone();
-}
 
 
 fn handle_client(
@@ -239,8 +237,17 @@ fn handle_client(
     is_debug: bool,
     is_outbound: bool,
     addr: String,
+    timeout: i64,
+    nb_process_concurrent: u32,
+    max_memory: u64,
 ) {
-
+    let raw_socket = client.raw_socket();
+    let uid = privatedirectory::getUIDUser(raw_socket);
+    let raw_socket_handle = client.raw_handle();
+    let ip_client: Vec<&str> = addr.as_str().split(":").collect();
+    let value_to_hash = format!("{}{}{}", "SSTIC_magic_prefix_dzadza", ip_client[0], uid);
+    let digest = md5::compute(value_to_hash.clone());
+    let hash_ip_string = format!("{:x}", digest);
     
     let now: DateTime<Utc> = Utc::now();
     println!(
@@ -250,11 +257,11 @@ fn handle_client(
     );
 
 
-    let raw_socket_handle = client.raw_handle();
-
-    let hash_ip_string = get_unique_string(client, addr);
     
-    let profile = create_profile(&child_path, is_debug, is_outbound, &(hash_ip_string.clone()));   
+
+    
+    let full_profile_name = hash_ip_string.clone();   
+    let profile = create_profile(&child_path, is_debug, is_outbound, &full_profile_name);   
 
 
     let mut path_mazes_random = dir_maze.clone();    
@@ -279,7 +286,10 @@ fn handle_client(
         match profile.launch(
             raw_socket_handle as HANDLE,
             raw_socket_handle as HANDLE,
-            path_mazes_random.to_str().unwrap(),        
+            path_mazes_random.to_str().unwrap(),
+            timeout,
+            nb_process_concurrent,
+            max_memory,
         ) {
             Ok(x) => {
                 info!("End of {:}", hash_ip_string);
@@ -432,6 +442,24 @@ fn main() {
                      .value_name("PORT")
                      .default_value("4577")
                      .help("Port to bind the TCP server on"))
+            .arg(Arg::with_name("timeout")
+                     .short("t")
+                     .long("timeout")
+                     .value_name("TIMEOUT")
+                     .default_value("120")
+                     .help("JOB Limitation : Timeout in seconds after which the program terminates"))             
+            .arg(Arg::with_name("nb_process_concurrent")
+                     .short("n")
+                     .long("nb_process_concurrent")
+                     .value_name("nb_process_concurrent")
+                     .default_value("10")
+                     .help("JOB Limitation : number of process allowed by the job in the jail"))             
+            .arg(Arg::with_name("max_memory")
+                     .short("m")
+                     .long("max_memory")
+                     .value_name("max_memory")
+                     .default_value("100")
+                     .help("JOB Limitation : Amount of RAM allowed to be allocated in MB"))                                  
             .arg(Arg::with_name("CHILD_PATH")
                      .index(1)
                      .required(true)
@@ -574,7 +602,8 @@ fn test_sandbox_key_read() {
         println!("Testing with default privileges");
         let launch_result = profile.launch(INVALID_HANDLE_VALUE,
                                            INVALID_HANDLE_VALUE,
-                                           dir_path.to_str().unwrap());
+                                           dir_path.to_str().unwrap(),
+                                            500 as i64);
         assert!(launch_result.is_ok());
 
         let hProcess = launch_result.unwrap();

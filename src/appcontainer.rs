@@ -117,7 +117,7 @@ impl Profile {
         self.debug = is_debug;
     }
 
-    pub fn launch(&self, stdin: HANDLE, stdout: HANDLE, dirPath: &str) -> Result<HandlePtr, DWORD> {
+    pub fn launch(&self, stdin: HANDLE, stdout: HANDLE, dirPath: &str, timeAlive: i64, nb_process_concurrent: u32, max_memory: u64) -> Result<HandlePtr, DWORD> {
         let network_allow_sid = match string_to_sid("S-1-15-3-1") {
             Ok(x) => x,
             Err(_) => return Err(0xffffffff),
@@ -289,14 +289,16 @@ impl Profile {
                 PriorityClass: 0 as DWORD,
                 SchedulingClass: 0 as DWORD,
             };
-            bli.PerProcessUserTimeLimit = 120 * 1000 * 1000 * 10; //10 * 1000 * 1000 * 10;
-            bli.PerJobUserTimeLimit = 120 * 1000 * 1000 * 10; //10 * 1000 * 1000 * 10;
+
+            // 100-nanosecond tick
+            bli.PerProcessUserTimeLimit = timeAlive * 1000 * 1000 * 10; //10 * 1000 * 1000 * 10;
+            bli.PerJobUserTimeLimit = timeAlive * 1000 * 1000 * 10; //10 * 1000 * 1000 * 10;
             bli.LimitFlags = JOB_OBJECT_LIMIT_PROCESS_TIME
                 | JOB_OBJECT_LIMIT_JOB_TIME
                 | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
                 | JOB_OBJECT_LIMIT_JOB_MEMORY
                 | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
-            bli.ActiveProcessLimit = 2;
+            bli.ActiveProcessLimit = nb_process_concurrent;
 
             let ioc = IO_COUNTERS {
                 OtherOperationCount: 0 as SIZE_T,
@@ -316,11 +318,11 @@ impl Profile {
                 PeakJobMemoryUsed: 0 as SIZE_T,
             };
 
-            let memoryLimit = 100;
-            eli.JobMemoryLimit = memoryLimit * 1000 * 1000;
-            eli.ProcessMemoryLimit = memoryLimit * 1000 * 1000;
-            eli.PeakJobMemoryUsed = memoryLimit * 1000 * 1000;
-            eli.PeakProcessMemoryUsed = memoryLimit * 1000 * 1000;
+            
+            eli.JobMemoryLimit = max_memory * 1000 * 1000;
+            eli.ProcessMemoryLimit = max_memory * 1000 * 1000;
+            eli.PeakJobMemoryUsed = max_memory * 1000 * 1000;
+            eli.PeakProcessMemoryUsed = max_memory * 1000 * 1000;
 
             kernel32::SetInformationJobObject(
                 hJob,
