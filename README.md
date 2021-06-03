@@ -2,10 +2,6 @@
 
 More details about this environment and the modifications are available [here](https://thalium.github.io/blog/posts/sstic_infra_windows/)
 
-1. Security. Challengers getting an RCE could kill processes of other challengers => Solved by using a different AppContainerProfile for each connection.
-2. Security. Challengers getting an RCE could DoS the remote machine by executing processes with huge usage of memory and CPUs => Solved by using a Job limiting the duration, the number of concurrent processes and the amount of memory allowed. These parameters are configurable with the command line.
-3. Feature. Challengers now have a private directory where they can read and write. Other participants cannot RW this folder. Implemented with the creation of a folder belonging to the unique AppContainerProfile.
-4. Feature. Challengers can retrieve theire private profile during 10 minutes after its creation. This done by generating a unique identifier for each challenger. The challenger decides if he wants to retrieve its private folder by entering its identifier, or he can decide to create a new folder. 
 
 # AppJailLauncher (Rust)
 
