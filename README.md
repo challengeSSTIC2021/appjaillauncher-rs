@@ -1,6 +1,6 @@
 # Upgraded for the SSTIC
 
-More details [here](https://thalium.github.io/blog/posts/sstic_infra_windows/)
+More details about this environment and the modifications are available [here](https://thalium.github.io/blog/posts/sstic_infra_windows/)
 
 1. Security. Challengers getting an RCE could kill processes of other challengers => Solved by using a different AppContainerProfile for each connection.
 2. Security. Challengers getting an RCE could DoS the remote machine by executing processes with huge usage of memory and CPUs => Solved by using a Job limiting the duration, the number of concurrent processes and the amount of memory allowed. These parameters are configurable with the command line.
