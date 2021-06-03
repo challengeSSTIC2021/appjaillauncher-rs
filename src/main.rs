@@ -138,7 +138,7 @@ fn create_profile(
 #[cfg(all(windows, not(test)))]
 #[allow(unreachable_code)]
 fn do_run(matches: &ArgMatches) {
-    let flag_path = PathBuf::from(matches.value_of("key").unwrap());
+
     let dir_maze = PathBuf::from(matches.value_of("foldermazes").unwrap());
 
     if let Err(_) = fs::create_dir_all(dir_maze.clone()) {
@@ -146,10 +146,7 @@ fn do_run(matches: &ArgMatches) {
         process::exit(-1);
     }
 
-    if !flag_path.exists() || flag_path.is_dir() || !flag_path.is_file() {
-        error!("Specified key path ({:?}) is invalid", flag_path);
-        process::exit(-1);
-    }
+
 
     let child_path = Path::new(matches.value_of("CHILD_PATH").unwrap());
     info!("  child_path = {:?}", child_path);
@@ -172,26 +169,7 @@ fn do_run(matches: &ArgMatches) {
     info!("JOB parameters :  max Memory = {:}", max_memory);
 
 
-    /*
-    let mut flag_dir_path = flag_path.clone();
-    flag_dir_path.pop();
-
-    if !add_sid_profile_entry(&flag_dir_path, &profile.sid, GENERIC_READ | GENERIC_EXECUTE) {
-        error!("Failed to add AppContainer profile ACL entry into {:?}",
-        flag_dir_path);
-        process::exit(-1);
-    }
-
-    if !add_sid_profile_entry(&key_path, &profile.sid, GENERIC_READ) {
-        error!("Failed to add AppContainer profile ACL entry into {:?}",
-               key_path);
-        process::exit(-1);
-    }
-    */
     {
-        /*let key_dir_abspath = key_dir_path.canonicalize().unwrap();
-        info!("key_dir_abspath = {:?}", key_dir_abspath);*/
-
         info!("Attempting to bind to port {:}", port);
         let server = match asw::TcpServer::bind(port) {
             Ok(x) => x,
@@ -254,10 +232,7 @@ fn handle_client(
         " + Accepted new client connection from {:} at {}",
         addr,
         now.to_rfc2822()
-    );
-
-
-    
+    );   
 
     
     let full_profile_name = hash_ip_string.clone();   
@@ -293,16 +268,6 @@ fn handle_client(
         ) {
             Ok(x) => {
                 info!("End of {:}", hash_ip_string);
-                /*info!(
-                    "     Launched new process with handle {:?} with current_dir = {:?}",
-                    x.raw, path_mazes_random
-                );
-                let now: DateTime<Utc> = Utc::now();
-                println!(
-                    " + Accepted new client connection from {:} at {}",
-                    addr,
-                    now.to_rfc2822()
-                );*/
                 unsafe {
                     kernel32::CloseHandle(x.raw);
                 };
@@ -310,10 +275,10 @@ fn handle_client(
             Err(_x) => {
 
                 match fs::remove_dir_all(path_mazes_random) {                
-                    Ok(_x) => {},
+                    Ok(_y) => {},
                     Err(e) => eprintln!("Problem while removing dir {}", e),
                   }
-                //error!("     Failed to launch new process: error={:}", x);
+                error!("     Failed to launch new process: error={:}", _x);
             }
         }
     }
@@ -425,12 +390,6 @@ fn main() {
             .arg(Arg::with_name("outbound")
                      .long("enable-outbound")
                      .help("Enables outbound network connections from the AppContainer'd process"))
-            .arg(Arg::with_name("key")
-                     .short("k")
-                     .long("key")
-                     .value_name("KEYFILE")
-                     .required(true)
-                     .help("The path to the \"key\" file that contains the challenge solution token"))
             .arg(Arg::with_name("foldermazes")
                      .short("f")
                      .long("foldermazes")
